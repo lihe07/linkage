@@ -4,4 +4,4 @@
 
 __attribute__((constructor)) void INIT() { printf("In .init_array\n"); }
 
-int main() { printf("Wow hello"); }
+int main() { printf("Wow hello\n"); }
