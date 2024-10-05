@@ -3,12 +3,6 @@
 version = 3
 
 [[package]]
-name = "adler2"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "512761e0bb2578dd7380c6baaa0f4ce03e84f95e960231d1dec8bf4d7d6e2627"
-
-[[package]]
 name = "anyhow"
 version = "1.0.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -25,31 +19,6 @@ name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
-
-[[package]]
-name = "crc32fast"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a97769d94ddab943e4510d138150169a2758b5ef3eb191a9ee688de3e23ef7b3"
-dependencies = [
- "cfg-if",
-]
-
-[[package]]
-name = "elf"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4445909572dbd556c457c849c4ca58623d84b27c8fff1e74b0b4227d8b90d17b"
-
-[[package]]
-name = "flate2"
-version = "1.0.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1b589b4dc103969ad3cf85c950899926ec64300a1a46d76c03a6072957036f0"
-dependencies = [
- "crc32fast",
- "miniz_oxide",
-]
 
 [[package]]
 name = "fuchsia-cprng"
@@ -95,11 +64,9 @@ name = "linkage"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "elf",
  "goblin",
  "libloading",
  "mmap",
- "object",
  "region",
 ]
 
@@ -119,21 +86,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "memchr"
-version = "2.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78ca9ab1a0babb1e7d5695e3530886289c18cf2f87ec19a575a0abdce112e3a3"
-
-[[package]]
-name = "miniz_oxide"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2d80299ef12ff69b16a84bb182e3b9df68b5a91574d3d4fa6e41b65deec4df1"
-dependencies = [
- "adler2",
-]
-
-[[package]]
 name = "mmap"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -141,17 +93,6 @@ checksum = "0bc85448a6006dd2ba26a385a564a8a0f1f2c7e78c70f1a70b2e0f4af286b823"
 dependencies = [
  "libc 0.1.12",
  "tempdir",
-]
-
-[[package]]
-name = "object"
-version = "0.36.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "084f1a5821ac4c651660a94a7153d27ac9d8a53736203f58b31945ded098070a"
-dependencies = [
- "flate2",
- "memchr",
- "ruzstd",
 ]
 
 [[package]]
@@ -237,15 +178,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ruzstd"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99c3938e133aac070997ddc684d4b393777d293ba170f2988c8fd5ea2ad4ce21"
-dependencies = [
- "twox-hash",
-]
-
-[[package]]
 name = "scroll"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -266,12 +198,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "static_assertions"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
 name = "syn"
 version = "2.0.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -290,16 +216,6 @@ checksum = "15f2b5fb00ccdf689e0149d1b1b3c03fead81c2b37735d812fa8bddbbf41b6d8"
 dependencies = [
  "rand",
  "remove_dir_all",
-]
-
-[[package]]
-name = "twox-hash"
-version = "1.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
-dependencies = [
- "cfg-if",
- "static_assertions",
 ]
 
 [[package]]

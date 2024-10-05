@@ -21,6 +21,7 @@ struct ElfFile {
 }
 
 fn jmp(addr: usize) {
+    println!("Jumping to {:x}", addr);
     // transmute the address to a function pointer
     unsafe {
         let f: fn() = std::mem::transmute(addr);
@@ -177,10 +178,13 @@ impl ElfFile {
                 let aligned_addr = addr & !0xfff; // align to page size
 
                 let size = seg.p_memsz as usize;
-                let size_with_align = size + (addr - aligned_addr) as usize;
-
                 let file_size = seg.p_filesz as usize;
                 let offset = seg.p_offset as usize;
+
+                // Check if offset + file_size is beyond file length.
+                let file_size = std::cmp::min(file_size, self.bytes.len() - offset);
+
+                let size_with_align = size + (addr - aligned_addr) as usize;
 
                 let data = &self.bytes[offset..offset + file_size];
 
@@ -188,6 +192,17 @@ impl ElfFile {
                     "Mapping segment: addr={:x}, size={}, file_size={}, offset={}",
                     addr, size, file_size, offset
                 );
+
+                let mem_map = mmap::MemoryMap::new(
+                    size_with_align,
+                    &[
+                        mmap::MapOption::MapReadable,
+                        mmap::MapOption::MapWritable,
+                        mmap::MapOption::MapExecutable,
+                        mmap::MapOption::MapOffset(offset as _),
+                    ],
+                )?;
+                std::mem::forget(mem_map);
 
                 // Adjust permission
                 unsafe {
@@ -247,13 +262,16 @@ impl ElfFile {
             }
         }
 
-        dbg!(&init_array);
+        println!("init_array has {} functions", init_array.len());
 
         for &func in init_array.iter() {
             if func != 0 {
+                // SPEC
+                let func = func - 0x7af10dc000 + base;
+
                 println!("Calling init_array function at {:x}", func);
-                let f: fn() = unsafe { std::mem::transmute(func) };
-                f();
+
+                jmp(func as usize);
             }
         }
 
