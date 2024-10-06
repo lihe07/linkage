@@ -35,9 +35,9 @@ def my_syscall_write(ql: Qiling, fd: int, buf: int, count: int) -> int:
         if hasattr(fobj, "write"):
             fobj.write(data)
 
-        if data.startswith(b"Jumping to"):
+        if data.startswith(b"Jumping to 6c5f34b4"):
             print("=====")
-            ql.verbose = QL_VERBOSE.DEBUG
+            ql.verbose = QL_VERBOSE.DISASM
         if data.startswith(b"Function returned"):
             ql.verbose = QL_VERBOSE.DISABLED
     except:

@@ -16,6 +16,17 @@ macro_rules! JMP_SLOT {
     };
 }
 
+macro_rules! RELATIVE {
+    ($offset:expr, $addend:expr) => {
+        MyReloc {
+            r_offset: $offset,
+            r_addend: $addend,
+            r_sym: "".to_string(),
+            r_type: goblin::elf::reloc::R_AARCH64_RELATIVE,
+        }
+    };
+}
+
 const DUMP_BASE: u64 = 0x7af10dc000;
 
 pub fn process_got(base: *mut u8) {
@@ -89,5 +100,13 @@ pub fn get_custom_relocs() -> Vec<MyReloc> {
         JMP_SLOT!(0x2f633e0, "strstr"),
         JMP_SLOT!(0x2f633f8, "div"),
         JMP_SLOT!(0x2f63400, "sqrt"),
+        JMP_SLOT!(0x2f63518, "setlocale"),
+        // C++ Hell
+        // std::_Rb_tree<void (*)(), void (*)(), std::_Identity<void (*)()>, std::less<void (*)()>, std::allocator<void (*)()> >::_M_insert_unique
+        RELATIVE!(0x2f63208, 0x00ae4648),
+        // std::_Rb_tree<void (*)(), void (*)(), std::_Identity<void (*)()>, std::less<void (*)()>, std::allocator<void (*)()> >::_M_get_insert_unique_pos
+        RELATIVE!(0x2f633b0, 0x00ae4698),
+        // std::_Rb_tree<void (*)(), void (*)(), std::_Identity<void (*)()>, std::less<void (*)()>, std::allocator<void (*)()> >::_M_insert_
+        RELATIVE!(0x2f636a0, 0x00ae472c),
     ]
 }

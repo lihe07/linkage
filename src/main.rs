@@ -190,8 +190,23 @@ impl ElfFile {
                         *ptr = symbol;
                     }
                 }
+                goblin::elf::reloc::R_AARCH64_RELATIVE => {
+                    let addr = self.base + rel.r_offset as u64;
+
+                    let addend = rel.r_addend as u64;
+                    let value = self.base + addend;
+                    unsafe {
+                        println!(
+                            "Relocating RELA at {:x} ({:x} + {:x}) to {:x} ({:x} + {:x})",
+                            addr, self.base, rel.r_offset, value, self.base, addend
+                        );
+                        let ptr = addr as *mut u64;
+                        *ptr = value;
+                    }
+                }
+
                 _ => {
-                    println!("Unknown relocation type: {}", rel.r_type);
+                    panic!("Unknown relocation type: {}", rel.r_type);
                 }
             }
         }
@@ -355,6 +370,26 @@ impl ElfFile {
             base + 0x00a613a8, // INIT 21
             base + 0x00a613ec, // INIT 22
             base + 0x00a61504, // INIT 23
+            base + 0x00a616c8, // INIT 24
+            base + 0x00a616ec, // INIT 25
+            base + 0x00a61740, // INIT 26
+            base + 0x00a61764, // INIT 27
+            base + 0x00a617c4, // INIT 28
+            base + 0x00a61800, // INIT 29
+            base + 0x00a61874, // INIT 30
+            base + 0x00a61898, // INIT 31
+            base + 0x00a61938, // INIT 32
+            base + 0x00a61ad4, // INIT 33
+            base + 0x00a619a0, // INIT 34
+            base + 0x00a619d8, // INIT 35
+            base + 0x00a619fc, // INIT 36
+            base + 0x00a61a6c, // INIT 37
+            base + 0x00a61aa8, // INIT 38
+            base + 0x00a61af0, // INIT 39
+            base + 0x00a61b08, // INIT 40
+            base + 0x00a61b68, // INIT 41
+            base + 0x00a61bb4, // INIT 42
+            base + 0x00a61ca8, // INIT 43
         ];
 
         println!("init_array has {} functions", init_array.len());
@@ -401,11 +436,21 @@ fn main() {
 
     elf.load().unwrap();
 
+    println!("===========================");
+    println!("= ELF successfully loaded =");
+    println!("===========================");
+
     let il2cpp_init = elf.get_symbol("il2cpp_init").unwrap();
 
     println!("il2cpp_init: {:x}", il2cpp_init);
 
-    jmp(il2cpp_init as usize);
+    // jmp(il2cpp_init as usize);
+    println!("Jumping to {:x}", il2cpp_init);
+
+    // il2cpp_init takes string as argument
+    let il2cpp_init: extern "C" fn(*const u8) -> u64 = unsafe { std::mem::transmute(il2cpp_init) };
+
+    il2cpp_init("Hello, world!\0".as_ptr());
 
     println!("Done!");
 }
