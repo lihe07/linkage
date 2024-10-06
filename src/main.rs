@@ -2,6 +2,7 @@ use region::Protection;
 use std::io::Write;
 
 mod hooks;
+mod relocs;
 
 fn load_library(name: &str) -> anyhow::Result<libloading::Library> {
     unsafe {
@@ -28,13 +29,6 @@ fn jmp(addr: usize) {
         let f: fn() = std::mem::transmute(addr);
         f();
     }
-}
-
-struct MyReloc {
-    r_offset: u64,
-    r_addend: u64,
-    r_sym: String,
-    r_type: u32,
 }
 
 impl ElfFile {
@@ -180,43 +174,7 @@ impl ElfFile {
     fn relocate_custom(&self) -> anyhow::Result<()> {
         println!("Custom relocations");
 
-        let relocs = vec![
-            // JMP_SLOT at base + 0x2f63570 is operator new (_Znwm)
-            MyReloc {
-                r_offset: 0x2f63570,
-                r_addend: 0,
-                r_sym: "_Znwm".to_string(),
-                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
-            },
-            // JMP_SLOT at base + 0x02f63210 is pthread_mutexattr_init
-            MyReloc {
-                r_offset: 0x2f63210,
-                r_addend: 0,
-                r_sym: "pthread_mutexattr_init".to_string(),
-                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
-            },
-            // JMP_SLOT at base + 0x2f63848 is pthread_mutexattr_settype
-            MyReloc {
-                r_offset: 0x2f63848,
-                r_addend: 0,
-                r_sym: "pthread_mutexattr_settype".to_string(),
-                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
-            },
-            // data_2f63970 is pthread_mutex_init
-            MyReloc {
-                r_offset: 0x2f63970,
-                r_addend: 0,
-                r_sym: "pthread_mutex_init".to_string(),
-                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
-            },
-            // data_2f639a0A is pthread_mutexattr_destroy
-            MyReloc {
-                r_offset: 0x2f639a0,
-                r_addend: 0,
-                r_sym: "pthread_mutexattr_destroy".to_string(),
-                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
-            },
-        ];
+        let relocs = relocs::get_custom_relocs();
 
         for rel in relocs.iter() {
             match rel.r_type {
@@ -247,7 +205,7 @@ impl ElfFile {
         let mut mem_start = u64::MAX;
         let mut mem_end = 0;
 
-        let three_mb = 3 * 1024 * 1024;
+        let extra_bytes = 5 * 1024 * 1024;
 
         for seg in self.object.program_headers.iter() {
             if seg.p_type == goblin::elf::program_header::PT_LOAD {
@@ -256,8 +214,7 @@ impl ElfFile {
             }
         }
 
-        // PATCH: add three mb
-        mem_end += three_mb;
+        mem_end += extra_bytes;
 
         // Allocate memory
         let size = (mem_end - mem_start) as usize & !0xfff;
@@ -285,7 +242,7 @@ impl ElfFile {
 
                 if offset != 0 {
                     // Patch: add three mb
-                    size += three_mb as usize;
+                    size += extra_bytes as usize;
                 }
 
                 // Check if offset + file_size is beyond file length.
@@ -338,6 +295,9 @@ impl ElfFile {
             }
         }
 
+        // before relocate, first process GOT
+        relocs::process_got(base as *mut u8);
+
         self.relocate()?;
         self.relocate_custom()?;
 
@@ -371,17 +331,30 @@ impl ElfFile {
         // }
 
         let init_array = vec![
-            base + 0x00a6089c,
-            base + 0x00a60914,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
+            base + 0x00a6089c, // INIT 0
+            base + 0x00a60914, // INIT 1
+            base + 0x00a60b48, // INIT 2
+            base + 0x00a60bfc, // INIT 3
+            base + 0x00a60c3c, // INIT 4
+            base + 0x00a60c78, // INIT 5
+            base + 0x00a60cb4, // INIT 6
+            base + 0x00a60d38, // INIT 7
+            base + 0x00a60d9c, // INIT 8
+            base + 0x00a60e44, // INIT 9
+            base + 0x00a60ec0, // INIT 10
+            base + 0x00a60f00, // INIT 11
+            base + 0x00a60f40, // INIT 12
+            base + 0x00a60ffc, // INIT 13
+            base + 0x00a61078, // INIT 14
+            base + 0x00a61180, // INIT 15
+            base + 0x00a611bc, // INIT 16
+            base + 0x00a6122c, // INIT 17
+            base + 0x00a61268, // INIT 18
+            base + 0x00a612bc, // INIT 19
+            base + 0x00a6136c, // INIT 20
+            base + 0x00a613a8, // INIT 21
+            base + 0x00a613ec, // INIT 22
+            base + 0x00a61504, // INIT 23
         ];
 
         println!("init_array has {} functions", init_array.len());

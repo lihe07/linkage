@@ -37,7 +37,7 @@ def my_syscall_write(ql: Qiling, fd: int, buf: int, count: int) -> int:
 
         if data.startswith(b"Jumping to"):
             print("=====")
-            ql.verbose = QL_VERBOSE.DISASM
+            ql.verbose = QL_VERBOSE.DEBUG
         if data.startswith(b"Function returned"):
             ql.verbose = QL_VERBOSE.DISABLED
     except:
@@ -51,5 +51,25 @@ def my_syscall_write(ql: Qiling, fd: int, buf: int, count: int) -> int:
 
 q.os.set_syscall("write", my_syscall_write, QL_INTERCEPT.CALL)
 
+
+def LibraryNamePrefixAndSuffix(ql: Qiling, *args) -> None:
+    # get the three arguments
+    arg0 = ql.arch.regs.x0
+    arg1 = ql.arch.regs.x1
+    arg2 = ql.arch.regs.x2
+    print("==============")
+    print(f"arg0: {arg0}")
+    print(f"arg1: '{ql.mem.string(arg1)}'")
+    print(f"arg2: '{ql.mem.string(arg2)}'")
+
+    addr = BASE + 0x2ECC440
+
+    # print the u64 value at the address
+    print(f"u64 at {addr}: {hex(ql.mem.read_ptr(addr, 8))}")
+
+
+BASE = 0x6BB52000
+
+q.hook_address(LibraryNamePrefixAndSuffix, BASE + 0x00AC5844)
 
 q.run()
