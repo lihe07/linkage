@@ -344,19 +344,19 @@ impl ElfFile {
         println!("My pid: {}", std::process::id());
 
         // Call init_array
-        let dynamic = self.object.dynamic.as_ref().unwrap();
-
-        let mut init_array_start = 0;
-        let mut init_array_size = 0;
-
-        for entry in dynamic.dyns.iter() {
-            if entry.d_tag == goblin::elf::dynamic::DT_INIT_ARRAY {
-                init_array_start = entry.d_val;
-            }
-            if entry.d_tag == goblin::elf::dynamic::DT_INIT_ARRAYSZ {
-                init_array_size = entry.d_val;
-            }
-        }
+        // let dynamic = self.object.dynamic.as_ref().unwrap();
+        //
+        // let mut init_array_start = 0;
+        // let mut init_array_size = 0;
+        //
+        // for entry in dynamic.dyns.iter() {
+        //     if entry.d_tag == goblin::elf::dynamic::DT_INIT_ARRAY {
+        //         init_array_start = entry.d_val;
+        //     }
+        //     if entry.d_tag == goblin::elf::dynamic::DT_INIT_ARRAYSZ {
+        //         init_array_size = entry.d_val;
+        //     }
+        // }
 
         // Read the init_array
         // let mut init_array = Vec::new();
