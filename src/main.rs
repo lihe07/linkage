@@ -405,6 +405,20 @@ impl ElfFile {
 
         Ok(())
     }
+
+    fn get_symbol(&self, name: &str) -> Option<u64> {
+        for sym in self.object.dynsyms.iter() {
+            let sym_name = sym.st_name;
+            if let Some(sym_name) = self.object.dynstrtab.get(sym_name) {
+                let sym_name = sym_name.unwrap_or_default();
+                // Check if is global and the name matches
+                if sym_name == name && sym.st_bind() == goblin::elf::sym::STB_GLOBAL {
+                    return Some(sym.st_value + self.base);
+                }
+            }
+        }
+        None
+    }
 }
 
 fn main() {
@@ -413,6 +427,12 @@ fn main() {
     let mut elf = ElfFile::parse(&path).unwrap();
 
     elf.load().unwrap();
+
+    let il2cpp_init = elf.get_symbol("il2cpp_init").unwrap();
+
+    println!("il2cpp_init: {:x}", il2cpp_init);
+
+    jmp(il2cpp_init as usize);
 
     println!("Done!");
 }

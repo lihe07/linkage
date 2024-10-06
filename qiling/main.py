@@ -38,7 +38,7 @@ def my_syscall_write(ql: Qiling, fd: int, buf: int, count: int) -> int:
         if data.startswith(b"Jumping to"):
             print("=====")
             ql.verbose = QL_VERBOSE.DISASM
-        if data.startswith(b"Done!"):
+        if data.startswith(b"Function returned"):
             ql.verbose = QL_VERBOSE.DISABLED
     except:
         ret = -1
