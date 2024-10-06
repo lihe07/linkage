@@ -38,6 +38,8 @@ def my_syscall_write(ql: Qiling, fd: int, buf: int, count: int) -> int:
         if data.startswith(b"Jumping to"):
             print("=====")
             ql.verbose = QL_VERBOSE.DISASM
+        if data.startswith(b"Done!"):
+            ql.verbose = QL_VERBOSE.DISABLED
     except:
         ret = -1
     else:

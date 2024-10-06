@@ -1,6 +1,7 @@
+use region::Protection;
 use std::io::Write;
 
-use region::Protection;
+mod hooks;
 
 fn load_library(name: &str) -> anyhow::Result<libloading::Library> {
     unsafe {
@@ -27,6 +28,13 @@ fn jmp(addr: usize) {
         let f: fn() = std::mem::transmute(addr);
         f();
     }
+}
+
+struct MyReloc {
+    r_offset: u64,
+    r_addend: u64,
+    r_sym: String,
+    r_type: u32,
 }
 
 impl ElfFile {
@@ -58,6 +66,12 @@ impl ElfFile {
     }
 
     fn find_symbol(&self, name: &str) -> anyhow::Result<u64> {
+        // First try hook
+        if let Some(func) = hooks::hook_symbol(name) {
+            println!("Hooked symbol: {}", name);
+            return Ok(func as u64);
+        }
+
         for lib in self.libraries.iter() {
             unsafe {
                 let symbol = lib.get::<*const u8>(name.as_bytes())?;
@@ -73,7 +87,7 @@ impl ElfFile {
         // First, RELA
         for rela in self.object.dynrelas.iter() {
             match rela.r_type {
-                goblin::elf::reloc::R_X86_64_RELATIVE => {
+                goblin::elf::reloc::R_AARCH64_RELATIVE => {
                     let addr = self.base + rela.r_offset as u64;
 
                     let addend = rela.r_addend.unwrap() as u64;
@@ -87,7 +101,7 @@ impl ElfFile {
                         *ptr = value;
                     }
                 }
-                goblin::elf::reloc::R_X86_64_GLOB_DAT => {
+                goblin::elf::reloc::R_AARCH64_GLOB_DAT => {
                     let addr = self.base + rela.r_offset as u64;
                     let symbol = &self.object.dynsyms.get(rela.r_sym as usize).unwrap();
                     let name = &self.object.dynstrtab[symbol.st_name as usize];
@@ -97,6 +111,24 @@ impl ElfFile {
                         println!(
                             "Relocating GLOB_DAT at {:x} ({}) to {:x} ({})",
                             addr, name, value, name
+                        );
+                        let ptr = addr as *mut u64;
+                        unsafe {
+                            *ptr = value;
+                        }
+                    } else {
+                        println!("Symbol not found: {}", name);
+                    }
+                }
+                goblin::elf::reloc::R_AARCH64_ABS64 => {
+                    let addr = self.base + rela.r_offset as u64;
+                    let symbol = &self.object.dynsyms.get(rela.r_sym as usize).unwrap();
+                    let name = &self.object.dynstrtab[symbol.st_name as usize];
+                    if let Ok(symbol) = self.find_symbol(name) {
+                        let value = symbol;
+                        println!(
+                            "Relocating ABS64 at {:x} ({:x} + {:x}) to {:x} ({})",
+                            addr, self.base, rela.r_offset, value, name
                         );
                         let ptr = addr as *mut u64;
                         unsafe {
@@ -117,7 +149,7 @@ impl ElfFile {
         // Then JMPREL
         for rel in self.object.pltrelocs.iter() {
             match rel.r_type {
-                goblin::elf::reloc::R_X86_64_JUMP_SLOT => {
+                goblin::elf::reloc::R_AARCH64_JUMP_SLOT => {
                     let addr = self.base + rel.r_offset as u64;
                     let symbol = &self.object.dynsyms.get(rel.r_sym as usize).unwrap();
                     let name = &self.object.dynstrtab[symbol.st_name as usize];
@@ -125,8 +157,8 @@ impl ElfFile {
                     if let Ok(symbol) = self.find_symbol(name) {
                         let value = symbol;
                         println!(
-                            "Relocating JMP_SLOT at {:x} ({}) to {:x} ({})",
-                            addr, name, value, name
+                            "Relocating JMP_SLOT at {:x} ({:x} + {:x}) to {:x} ({})",
+                            addr, self.base, rel.r_offset, value, name
                         );
                         let ptr = addr as *mut u64;
                         unsafe {
@@ -145,11 +177,77 @@ impl ElfFile {
         Ok(())
     }
 
+    fn relocate_custom(&self) -> anyhow::Result<()> {
+        println!("Custom relocations");
+
+        let relocs = vec![
+            // JMP_SLOT at base + 0x2f63570 is operator new (_Znwm)
+            MyReloc {
+                r_offset: 0x2f63570,
+                r_addend: 0,
+                r_sym: "_Znwm".to_string(),
+                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
+            },
+            // JMP_SLOT at base + 0x02f63210 is pthread_mutexattr_init
+            MyReloc {
+                r_offset: 0x2f63210,
+                r_addend: 0,
+                r_sym: "pthread_mutexattr_init".to_string(),
+                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
+            },
+            // JMP_SLOT at base + 0x2f63848 is pthread_mutexattr_settype
+            MyReloc {
+                r_offset: 0x2f63848,
+                r_addend: 0,
+                r_sym: "pthread_mutexattr_settype".to_string(),
+                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
+            },
+            // data_2f63970 is pthread_mutex_init
+            MyReloc {
+                r_offset: 0x2f63970,
+                r_addend: 0,
+                r_sym: "pthread_mutex_init".to_string(),
+                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
+            },
+            // data_2f639a0A is pthread_mutexattr_destroy
+            MyReloc {
+                r_offset: 0x2f639a0,
+                r_addend: 0,
+                r_sym: "pthread_mutexattr_destroy".to_string(),
+                r_type: goblin::elf::reloc::R_AARCH64_JUMP_SLOT,
+            },
+        ];
+
+        for rel in relocs.iter() {
+            match rel.r_type {
+                goblin::elf::reloc::R_AARCH64_JUMP_SLOT => {
+                    let addr = self.base + rel.r_offset as u64;
+                    let symbol = self.find_symbol(&rel.r_sym)?;
+                    println!(
+                        "Relocating JMP_SLOT at {:x} to {:x} ({})",
+                        addr, symbol, rel.r_sym
+                    );
+                    let ptr = addr as *mut u64;
+                    unsafe {
+                        *ptr = symbol;
+                    }
+                }
+                _ => {
+                    println!("Unknown relocation type: {}", rel.r_type);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Load the ELF file into memory
     fn load(&mut self) -> anyhow::Result<()> {
         // Calculate a good base
         let mut mem_start = u64::MAX;
         let mut mem_end = 0;
+
+        let three_mb = 3 * 1024 * 1024;
 
         for seg in self.object.program_headers.iter() {
             if seg.p_type == goblin::elf::program_header::PT_LOAD {
@@ -157,6 +255,9 @@ impl ElfFile {
                 mem_end = std::cmp::max(mem_end, seg.p_vaddr + seg.p_memsz);
             }
         }
+
+        // PATCH: add three mb
+        mem_end += three_mb;
 
         // Allocate memory
         let size = (mem_end - mem_start) as usize & !0xfff;
@@ -177,9 +278,15 @@ impl ElfFile {
                 let addr = base + seg.p_vaddr as u64;
                 let aligned_addr = addr & !0xfff; // align to page size
 
-                let size = seg.p_memsz as usize;
+                let mut size = seg.p_memsz as usize;
+
                 let file_size = seg.p_filesz as usize;
                 let offset = seg.p_offset as usize;
+
+                if offset != 0 {
+                    // Patch: add three mb
+                    size += three_mb as usize;
+                }
 
                 // Check if offset + file_size is beyond file length.
                 let file_size = std::cmp::min(file_size, self.bytes.len() - offset);
@@ -232,6 +339,7 @@ impl ElfFile {
         }
 
         self.relocate()?;
+        self.relocate_custom()?;
 
         println!("My pid: {}", std::process::id());
 
@@ -251,36 +359,49 @@ impl ElfFile {
         }
 
         // Read the init_array
-        let mut init_array = Vec::new();
-        if init_array_start != 0 && init_array_size != 0 {
-            let start = base + init_array_start as u64;
-            let size = init_array_size as usize;
-            let ptr = start as *const u64;
-            for i in 0..size / 8 {
-                let val = unsafe { *ptr.add(i) };
-                init_array.push(val);
-            }
-        }
+        // let mut init_array = Vec::new();
+        // if init_array_start != 0 && init_array_size != 0 {
+        //     let start = base + init_array_start as u64;
+        //     let size = init_array_size as usize;
+        //     let ptr = start as *const u64;
+        //     for i in 0..size / 8 {
+        //         let val = unsafe { *ptr.add(i) };
+        //         init_array.push(val);
+        //     }
+        // }
+
+        let init_array = vec![
+            base + 0x00a6089c,
+            base + 0x00a60914,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ];
 
         println!("init_array has {} functions", init_array.len());
 
         for &func in init_array.iter() {
             if func != 0 {
-                // SPEC
-                let func = func - 0x7af10dc000 + base;
-
-                println!("Calling init_array function at {:x}", func);
+                println!("Calling init_array function at base + {:x}", func - base);
 
                 jmp(func as usize);
+
+                println!("Function returned");
             }
         }
 
-        print!("Press enter to continue...");
-        std::io::stdout().flush()?;
-        let _ = std::io::stdin().read_line(&mut String::new());
-
-        // Get the address of the entry point
-        jmp(base as usize + self.object.entry as usize);
+        // print!("Press enter to continue...");
+        // std::io::stdout().flush()?;
+        // let _ = std::io::stdin().read_line(&mut String::new());
+        //
+        // // Get the address of the entry point
+        // jmp(base as usize + self.object.entry as usize);
 
         Ok(())
     }
@@ -292,4 +413,6 @@ fn main() {
     let mut elf = ElfFile::parse(&path).unwrap();
 
     elf.load().unwrap();
+
+    println!("Done!");
 }
