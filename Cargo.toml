@@ -4,8 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+android_logger = "0.14.1"
 anyhow = "1.0.89"
 goblin = "0.8.2"
+libc = "0.2.159"
 libloading = "0.8.5"
+log = "0.4.22"
 mmap = "0.1.1"
 region = "3.0.2"
+
+[lib]
+name = "linkage"
+path = "src/lib.rs"
+crate-type = ["lib", "cdylib"]
+
+[[bin]]
+name = "linkage"
+path = "src/main.rs"
