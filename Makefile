@@ -1,11 +1,3 @@
-test_static:
-	cd bin && make static
-	cargo r ./bin/static
-
-test_example:
-	cd bin && make example
-	cargo r ./bin/example
-
 ANDROID_NDK_HOME=/opt/android-ndk/
 export ANDROID_NDK_HOME
 
