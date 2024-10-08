@@ -44,7 +44,8 @@ def my_syscall_write(ql: Qiling, fd: int, buf: int, count: int) -> int:
 
         if data.startswith(b"Jumping to 6c5f34b4"):
             print("=====")
-            ql.verbose = QL_VERBOSE.DEFAULT
+            # save snapshot to ./before_il2cpp_init
+
         if data.startswith(b"Function returned"):
             ql.verbose = QL_VERBOSE.DISABLED
     except:
@@ -99,7 +100,7 @@ class Fake_maps(QlFsMappedObject):
         return 0
 
 
-q.add_fs_mapper("/proc/self/maps", Fake_maps(q))
+q.add_fs_mapper("/proc/self/task/2000/maps", Fake_maps(q))
 
 
 class Fake_stat(QlFsMappedObject):
@@ -142,5 +143,47 @@ BASE = 0x6BB52000
 
 q.hook_address(LibraryNamePrefixAndSuffix, BASE + 0x00AC5844)
 
+
+def hook_il2cpp_init(ql: Qiling, *args) -> None:
+    print("Il2cpp init called")
+    # ql.verbose = QL_VERBOSE.DISASM
+
+
+q.hook_address(hook_il2cpp_init, 0x6C5F34B4)
+
+
+def hook_gc_init(ql: Qiling, *args) -> None:
+    print("GC init called")
+    ql.verbose = QL_VERBOSE.DEBUG
+
+
+def hook_after_gc_init(ql: Qiling, *args) -> None:
+    print("After GC init called")
+
+
+q.hook_address(hook_gc_init, BASE + 0x00AC30A0)
+
+q.hook_address(hook_after_gc_init, BASE + 0x00AC3104)
+
+
+def hook_getenv(ql: Qiling, *args) -> None:
+    print("getenv called")
+    arg = ql.arch.regs.x0
+    print(f"arg: {ql.mem.string(arg)}")
+
+    if ql.mem.string(arg) == "GC_PRINT_VERBOSE_STATS":
+        print("Returning 1")
+        res = ql.mem.map_anywhere(len("1\0"))
+        ql.mem.string(res, "1\0")
+        ql.arch.regs.x0 = res
+
+        # get the return address from x30
+        ret = ql.arch.regs.x30
+        # set the return address to the next instruction (aarch64)
+        ret += 4
+        ql.arch.regs.arch_pc = ret
+
+
+q.hook_address(hook_getenv, BASE + 0x00A60050)
 
 q.run()

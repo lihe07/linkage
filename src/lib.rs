@@ -498,6 +498,16 @@ pub unsafe extern "C" fn myopen(filename: *const u8, flags: i32) -> *mut libc::c
         elf.load().unwrap();
 
         info!("Loaded libil2cpp.so");
+
+        info!("Let's wait for debugger to attach");
+
+        info!("My PID is {}", std::process::id());
+
+        let mut flag = true;
+        while flag {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+
         IL2CPP = Some(elf);
 
         // Allocate a handle in heap

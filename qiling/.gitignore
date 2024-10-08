@@ -1,3 +1,4 @@
 linkage
 arm64_android6.0/linkage
 arm64_android6.0/libil2cpp.so
+before_il2cpp_init
