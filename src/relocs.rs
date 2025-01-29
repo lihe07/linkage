@@ -1,3 +1,11 @@
+use log::{debug, warn};
+
+// Include file ./heap_allocs.txt and ./relative_rels.txt
+
+static HEAP_ALLOCS: &str = include_str!("./heap_allocs.txt");
+static RELATIVE_RELS: &str = include_str!("./relative_rels.txt");
+
+#[derive(Debug)]
 pub struct MyReloc {
     pub r_offset: u64,
     pub r_addend: u64,
@@ -16,17 +24,6 @@ macro_rules! JMP_SLOT {
     };
 }
 
-// macro_rules! RELATIVE {
-//     ($offset:expr, $addend:expr) => {
-//         MyReloc {
-//             r_offset: $offset,
-//             r_addend: $addend,
-//             r_sym: "".to_string(),
-//             r_type: goblin::elf::reloc::R_AARCH64_RELATIVE,
-//         }
-//     };
-// }
-
 pub const DUMP_BASE: u64 = 0x7af10dc000;
 
 pub fn process_got(base: *mut u8) {
@@ -38,16 +35,28 @@ pub fn process_got(base: *mut u8) {
     let first = unsafe { *got };
 
     // First should be 0x2ec0880
-    println!("GOT First: {:#x}", first);
+    debug!("GOT First: {:#x}", first);
+
+    got = got.wrapping_add(1); // Skip one
 
     let got_end = base.wrapping_add(0x2f62e20);
 
+    let mut i = 0;
     while got != got_end as *mut u64 {
         let addr = unsafe { *got };
-        if addr < DUMP_BASE {
-            println!("WARN: got element too small at {:#x}", got as u64);
+
+        if addr == 0 {
+            // Skipping
             got = got.wrapping_add(1);
             continue;
+        }
+
+        if addr < DUMP_BASE || addr > DUMP_BASE + 0x3323000 {
+            warn!(
+                "Invalid address: {:#x} at BASE + {:#x}",
+                addr,
+                got as u64 - base as u64
+            );
         }
 
         let addr = addr.wrapping_sub(DUMP_BASE).wrapping_add(base as u64);
@@ -56,31 +65,29 @@ pub fn process_got(base: *mut u8) {
             *got = addr;
         }
 
+        i += 1;
         got = got.wrapping_add(1);
     }
 
-    unsafe {
-        let elem = *(base.wrapping_add(0x2ecc440) as *const u64);
-        dbg!(elem);
-        println!("elem: {:#x}", elem);
-    }
+    debug!("Processed {} GOT elements", i);
 }
 
 pub fn process_rel_ro(base: *mut u8) {
-    let rel_ro = base.wrapping_add(0x2c18180);
+    let rel_ro = base.wrapping_add(0x2c18188);
     let mut rel_ro = rel_ro as *mut u64;
 
     let rel_ro_end = base.wrapping_add(0x2ec0880);
 
-    let max_size = 100 * 1024 * 1024 + DUMP_BASE;
-
     let mut i = 0;
     while rel_ro != rel_ro_end as *mut u64 {
         let addr = unsafe { *rel_ro };
-        if addr < DUMP_BASE || addr > max_size {
+
+        if addr < DUMP_BASE || addr > DUMP_BASE + 0x3323000 {
+            // It's safe to skip them.
             rel_ro = rel_ro.wrapping_add(1);
             continue;
         }
+
         let addr = addr.wrapping_sub(DUMP_BASE).wrapping_add(base as u64);
         unsafe {
             *rel_ro = addr;
@@ -88,37 +95,65 @@ pub fn process_rel_ro(base: *mut u8) {
         rel_ro = rel_ro.wrapping_add(1);
         i += 1;
     }
-    println!("Processed {} .data.rel.ro elements", i);
+    debug!("Processed {} .data.rel.ro elements", i);
 }
 
 pub fn process_data(base: *mut u8) {
-    let data = base.wrapping_add(0x02f639b8);
-    let mut data = data as *mut u64;
-
-    let data_end = base.wrapping_add(0x0309a6e8);
-
-    let max_size = 100 * 1024 * 1024 + DUMP_BASE;
-
     let mut i = 0;
-    while data != data_end as *mut u64 {
-        let addr = unsafe { *data };
-        if addr < DUMP_BASE || addr > max_size {
-            data = data.wrapping_add(1);
-            continue;
-        }
-        let addr = addr.wrapping_sub(DUMP_BASE).wrapping_add(base as u64);
+
+    // For each addr in HEAP_ALLOCS, set it to zero
+    for line in HEAP_ALLOCS.lines() {
+        // Parse hex offset
+        let off = usize::from_str_radix(line, 16).unwrap();
         unsafe {
-            *data = addr;
+            *base.wrapping_add(off) = 0;
         }
-        data = data.wrapping_add(1);
         i += 1;
     }
-    println!("Processed {} .data elements", i);
+
+    //
+
+    // For each addr in RELATIVE_RELS, compute relative addr
+    for line in RELATIVE_RELS.lines() {
+        // Parse hex offset
+        let off = usize::from_str_radix(line, 16).unwrap();
+        // Check if off is aligned with 8
+        if off % 8 == 0 {
+            let off = base.wrapping_add(off) as *mut u64;
+            unsafe {
+                let addr = *off;
+                let addr = addr.wrapping_sub(DUMP_BASE).wrapping_add(base as u64);
+                *off = addr;
+            }
+        } else {
+            // So it is aligned with 4. Read two u32s
+            let off = base.wrapping_add(off) as *mut u32;
+            unsafe {
+                let addr_low = *off;
+                let addr_hi = *off.add(1);
+                let addr = u64::from(addr_low) | (u64::from(addr_hi) << 32);
+                let addr = addr.wrapping_sub(DUMP_BASE).wrapping_add(base as u64);
+                let addr_low = addr as u32;
+                let addr_hi = (addr >> 32) as u32;
+                *off = addr_low;
+                *(off.add(1)) = addr_hi;
+            }
+        }
+        i += 1;
+    }
+
+    debug!("Processed {} .data elements", i);
 }
 
 pub fn get_custom_relocs() -> Vec<MyReloc> {
     vec![
-        // PLT
+        // ABS64 in GOT
+        JMP_SLOT!(0x2ed3288, "__sF"),
+        JMP_SLOT!(0x2eedce0, "_ctype_"),
+        JMP_SLOT!(0x2f46f48, "pthread_create"),
+        JMP_SLOT!(0x2f577e8, "environ"),
+
+        // GOT.PLT
         JMP_SLOT!(0x2f62e40, "strtod"),
         JMP_SLOT!(0x2f62e48, "strlen"),
         JMP_SLOT!(0x2f62e50, "_ZNSt9bad_allocD1Ev"),
@@ -489,12 +524,9 @@ pub fn get_custom_relocs() -> Vec<MyReloc> {
 
         // Floating
         JMP_SLOT!(0x2f64068, "malloc"),
-        // RELATIVE!(0x2f64070, 0), // Auto relative
         JMP_SLOT!(0x2f64078, "free"),
-        // RELATIVE!(0x2f64080, 0), // Auto relative
         JMP_SLOT!(0x2f64088, "calloc"),
         JMP_SLOT!(0x2f64090, "realloc"),
-        // RELATIVE!(0x2f64098, 0),
-        // RELATIVE!(0x2f640a0, 0),
+        // JMP_SLOT!(0x2f640b8, "unity_log_print")
     ]
 }

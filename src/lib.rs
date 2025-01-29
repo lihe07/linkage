@@ -5,6 +5,18 @@ mod relocs;
 
 use log::*;
 
+// On Linux 5.17+ PR_SET_VMA_ANON_NAME is available
+unsafe fn set_vma_name(start: *mut libc::c_void, len: usize, name: &str) {
+    let name = std::ffi::CString::new(name).unwrap();
+    libc::prctl(
+        libc::PR_SET_VMA,
+        libc::PR_SET_VMA_ANON_NAME,
+        start,
+        len,
+        name.as_ptr() as *const libc::c_void,
+    );
+}
+
 fn load_library(name: &str) -> anyhow::Result<libloading::Library> {
     unsafe {
         debug!("Loading library: {}", name);
@@ -19,6 +31,7 @@ pub struct ElfFile {
     libraries: Vec<libloading::Library>,
     object: goblin::elf::Elf<'static>,
     bytes: &'static [u8],
+    path: String,
 
     base: u64,
 }
@@ -56,6 +69,7 @@ impl ElfFile {
             libraries,
             object: file,
             bytes: bytes_leaked,
+            path: path.to_string(),
             base: 0,
         })
     }
@@ -77,7 +91,7 @@ impl ElfFile {
             }
         }
 
-        debug!("WARN: Symbol {name} not found in libraries, trying current object");
+        // debug!("WARN: Symbol {name} not found in libraries, trying current object");
 
         // Try to find the symbol in the current object
         for sym in self.object.dynsyms.iter() {
@@ -106,10 +120,10 @@ impl ElfFile {
                     let addend = rela.r_addend.unwrap() as u64;
                     let value = self.base + addend;
                     unsafe {
-                        debug!(
-                            "Relocating RELA at {:x} ({:x} + {:x}) to {:x} ({:x} + {:x})",
-                            addr, self.base, rela.r_offset, value, self.base, addend
-                        );
+                        // debug!(
+                        //     "Relocating RELA at {:x} ({:x} + {:x}) to {:x} ({:x} + {:x})",
+                        //     addr, self.base, rela.r_offset, value, self.base, addend
+                        // );
                         let ptr = addr as *mut u64;
                         *ptr = value;
                     }
@@ -152,13 +166,11 @@ impl ElfFile {
                     }
                 }
                 _ => {
-                    dbg!(rela);
                     debug!("Unknown relocation type: {}", rela.r_type);
                 }
             }
         }
 
-        dbg!(self.object.pltrelocs.len());
         // Then JMPREL
         for rel in self.object.pltrelocs.iter() {
             match rel.r_type {
@@ -200,10 +212,10 @@ impl ElfFile {
                 goblin::elf::reloc::R_AARCH64_JUMP_SLOT => {
                     let addr = self.base + rel.r_offset as u64;
                     let symbol = self.find_symbol(&rel.r_sym)?;
-                    debug!(
-                        "Relocating JMP_SLOT at {:x} to {:x} ({})",
-                        addr, symbol, rel.r_sym
-                    );
+                    // debug!(
+                    //     "Relocating JMP_SLOT at {:x} to {:x} ({})",
+                    //     addr, symbol, rel.r_sym
+                    // );
                     let ptr = addr as *mut u64;
                     unsafe {
                         *ptr = symbol;
@@ -249,140 +261,100 @@ impl ElfFile {
         Ok(())
     }
 
+    /// Map segments. Sets self.base
+    unsafe fn map_segments(&mut self) -> anyhow::Result<()> {
+        let total_size = 0x3323000;
+
+        // 1. Map
+        let total_map = libc::mmap(
+            std::ptr::null_mut(),
+            total_size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if total_map == libc::MAP_FAILED {
+            return Err(anyhow::anyhow!("mmap failed"));
+        }
+
+        let c_path = std::ffi::CString::new(self.path.clone()).unwrap();
+        let fd = libc::open(c_path.as_ptr() as *const libc::c_char, libc::O_RDONLY);
+        if fd == -1 {
+            return Err(anyhow::anyhow!("open failed"));
+        }
+
+        // 2. RX map
+        libc::mmap(
+            total_map,
+            0x2c08000,
+            libc::PROT_READ | libc::PROT_EXEC,
+            libc::MAP_PRIVATE | libc::MAP_FIXED,
+            fd,
+            0,
+        );
+
+        // 3. GAP
+        libc::mmap(
+            (total_map as usize + 0x2c08000) as *mut libc::c_void,
+            0x10000,
+            libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED,
+            -1,
+            0,
+        );
+
+        //  4. RW map
+        libc::mmap(
+            (total_map as usize + 0x2c18000) as *mut libc::c_void,
+            0x483000,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_FIXED,
+            fd,
+            0x2c18000,
+        );
+
+        // 5. BSS
+        let bss_map = libc::mmap(
+            (total_map as usize + 0x309B000) as *mut libc::c_void,
+            0x288000,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED,
+            -1,
+            0,
+        );
+
+        set_vma_name(bss_map, 0x288000, ".bss");
+
+        // Close fd
+        libc::close(fd);
+
+        self.base = total_map as u64;
+
+        Ok(())
+    }
+
     /// Load the ELF file into memory
     pub fn load(&mut self) -> anyhow::Result<()> {
-        // Calculate a good base
-        let mut mem_start = u64::MAX;
-        let mut mem_end = 0;
-
-        let extra_bytes = 5 * 1024 * 1024;
-
-        for seg in self.object.program_headers.iter() {
-            if seg.p_type == goblin::elf::program_header::PT_LOAD {
-                mem_start = std::cmp::min(mem_start, seg.p_vaddr & !0xfff);
-                mem_end = std::cmp::max(mem_end, seg.p_vaddr + seg.p_memsz);
-            }
-        }
-
-        mem_end += extra_bytes;
-
-        // Allocate memory
-        let size = (mem_end - mem_start) as usize & !0xfff;
-        debug!("Allocating {} bytes", size);
-
-        let mem_map = mmap::MemoryMap::new(size, &[])?;
-        // Forget the memory map so it doesn't get unmapped
-
-        let base = mem_map.data() as u64 - mem_start;
-
-        debug!("Base address: {:x}", base);
-        self.base = base;
-        std::mem::forget(mem_map);
-
         // mmap the segments
-        for seg in self.object.program_headers.iter() {
-            if seg.p_type == goblin::elf::program_header::PT_LOAD {
-                let addr = base + seg.p_vaddr as u64;
-                let aligned_addr = addr & !0xfff; // align to page size
-
-                let mut size = seg.p_memsz as usize;
-
-                let file_size = seg.p_filesz as usize;
-                let offset = seg.p_offset as usize;
-
-                if offset != 0 {
-                    // Patch: add three mb
-                    size += extra_bytes as usize;
-                }
-
-                // Check if offset + file_size is beyond file length.
-                let file_size = std::cmp::min(file_size, self.bytes.len() - offset);
-
-                let size_with_align = size + (addr - aligned_addr) as usize;
-
-                let data = &self.bytes[offset..offset + file_size];
-
-                debug!(
-                    "Mapping segment: addr={:x}, size={}, file_size={}, offset={}",
-                    addr, size, file_size, offset
-                );
-
-                let mem_map = mmap::MemoryMap::new(
-                    size_with_align,
-                    &[
-                        mmap::MapOption::MapReadable,
-                        mmap::MapOption::MapWritable,
-                        mmap::MapOption::MapExecutable,
-                        mmap::MapOption::MapOffset(offset as _),
-                    ],
-                )?;
-                std::mem::forget(mem_map);
-
-                // Adjust permission
-                unsafe {
-                    region::protect(
-                        aligned_addr as *const u8,
-                        size_with_align,
-                        Protection::READ | Protection::WRITE | Protection::EXECUTE,
-                    )?;
-                }
-
-                // Copy data to the mapped memory
-                unsafe {
-                    debug!("Copying data to {:x}", addr);
-
-                    std::ptr::copy(data.as_ptr(), addr as *mut u8, file_size);
-
-                    // Fill the rest with zeros
-                    if file_size < size {
-                        std::ptr::write_bytes(
-                            (addr + file_size as u64) as *mut u8,
-                            0,
-                            size - file_size,
-                        );
-                    }
-                }
-            }
+        debug!("Mapping segments...");
+        unsafe {
+            self.map_segments()?;
         }
+        debug!("Segments mapped. Base = {:x}", self.base);
 
+        let base = self.base;
         // before relocate, first process GOT
         relocs::process_got(base as *mut u8);
-
         relocs::process_rel_ro(base as *mut u8);
         relocs::process_data(base as *mut u8);
 
-        self.relocate()?;
+        // self.relocate()?;
         self.relocate_custom()?;
 
         debug!("My pid: {}", std::process::id());
 
         // Call init_array
-        // let dynamic = self.object.dynamic.as_ref().unwrap();
-        //
-        // let mut init_array_start = 0;
-        // let mut init_array_size = 0;
-        //
-        // for entry in dynamic.dyns.iter() {
-        //     if entry.d_tag == goblin::elf::dynamic::DT_INIT_ARRAY {
-        //         init_array_start = entry.d_val;
-        //     }
-        //     if entry.d_tag == goblin::elf::dynamic::DT_INIT_ARRAYSZ {
-        //         init_array_size = entry.d_val;
-        //     }
-        // }
-
-        // Read the init_array
-        // let mut init_array = Vec::new();
-        // if init_array_start != 0 && init_array_size != 0 {
-        //     let start = base + init_array_start as u64;
-        //     let size = init_array_size as usize;
-        //     let ptr = start as *const u64;
-        //     for i in 0..size / 8 {
-        //         let val = unsafe { *ptr.add(i) };
-        //         init_array.push(val);
-        //     }
-        // }
-
         let init_array = vec![
             base + 0x00a6089c, // INIT 0
             base + 0x00a60914, // INIT 1
@@ -442,13 +414,6 @@ impl ElfFile {
             }
         }
 
-        // print!("Press enter to continue...");
-        // std::io::stdout().flush()?;
-        // let _ = std::io::stdin().read_line(&mut String::new());
-        //
-        // // Get the address of the entry point
-        // jmp(base as usize + self.object.entry as usize);
-
         Ok(())
     }
 
@@ -495,18 +460,13 @@ pub unsafe extern "C" fn myopen(filename: *const u8, flags: i32) -> *mut libc::c
         }
 
         let mut elf = ElfFile::parse(filename).unwrap();
-        elf.load().unwrap();
+
+        if let Err(e) = elf.load() {
+            error!("Error loading libil2cpp.so: {:?}", e);
+            return std::ptr::null_mut();
+        }
 
         info!("Loaded libil2cpp.so");
-
-        info!("Let's wait for debugger to attach");
-
-        info!("My PID is {}", std::process::id());
-
-        let mut flag = true;
-        while flag {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
 
         IL2CPP = Some(elf);
 
@@ -537,7 +497,7 @@ pub unsafe extern "C" fn mysym(handle: *mut libc::c_void, symbol: *const u8) -> 
     info!("My dlsym: {:?}", symbol);
 
     if handle == MAGIC as *mut libc::c_void {
-        info!("Using our handle");
+        info!("My dlsym: using our handle");
 
         let elf = IL2CPP.as_ref().unwrap();
 
