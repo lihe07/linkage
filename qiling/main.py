@@ -154,7 +154,7 @@ q.hook_address(hook_il2cpp_init, 0x6C5F34B4)
 
 def hook_gc_init(ql: Qiling, *args) -> None:
     print("GC init called")
-    ql.verbose = QL_VERBOSE.DEBUG
+    # ql.verbose = QL_VERBOSE.DEBUG
 
 
 def hook_after_gc_init(ql: Qiling, *args) -> None:
