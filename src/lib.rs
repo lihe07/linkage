@@ -1,5 +1,3 @@
-use region::Protection;
-
 mod hooks;
 mod relocs;
 
