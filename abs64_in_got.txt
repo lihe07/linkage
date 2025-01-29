@@ -1,0 +1,4 @@
+0x2ed3288 __sF
+0x2eedce0 _ctype_
+0x2f46f48 pthread_create
+0x2f577e8 environ

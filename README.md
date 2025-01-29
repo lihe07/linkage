@@ -2,6 +2,12 @@
 
 A custom dynamic linker that attempts to load some specific memory dumps.
 
+## Pre-requisites
+
+Android NDK: r27 or later
+
+Rust: nightly with target aarch64-linux-android
+
 ## Testing
 
 With qiling framework:
@@ -9,6 +15,14 @@ With qiling framework:
 ```sh
 make qiling
 ```
+
+## Produce the bundle APK
+
+1. Patch `libunity.so` to add a NEEDED entry for `liblinkage.so`
+
+2. Patch `libunity.so` to replace dlopen, dlclose, dlsym with myopen, myclose, mysym in the dynamic symbol table
+
+3. Add `liblinkage.so` to the APK
 
 ## Progress
 
