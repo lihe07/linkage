@@ -1,12 +1,6 @@
 use linkage::ElfFile;
 use log::*;
 
-#[no_mangle]
-extern "C" fn Il2CppAndroidLogCallback(message: *const std::os::raw::c_char) {
-    let message = unsafe { std::ffi::CStr::from_ptr(message) };
-    info!("il2Cpp: {}", message.to_str().unwrap());
-}
-
 fn main() {
     // Init logger
 
@@ -26,13 +20,13 @@ fn main() {
     println!("= ELF successfully loaded =");
     println!("===========================");
 
-    let il2cpp_register_log_callback = elf.get_symbol("il2cpp_register_log_callback").unwrap();
-
-    let il2cpp_register_log_callback: extern "C" fn(extern "C" fn(*const std::os::raw::c_char)) =
-        unsafe { std::mem::transmute(il2cpp_register_log_callback) };
-
-    info!("Registering log callback");
-    il2cpp_register_log_callback(Il2CppAndroidLogCallback);
+    // let il2cpp_register_log_callback = elf.get_symbol("il2cpp_register_log_callback").unwrap();
+    //
+    // let il2cpp_register_log_callback: extern "C" fn(extern "C" fn(*const std::os::raw::c_char)) =
+    //     unsafe { std::mem::transmute(il2cpp_register_log_callback) };
+    //
+    // info!("Registering log callback");
+    // il2cpp_register_log_callback(linkage::hooks::my_log_callback);
 
     let il2cpp_gc_disable = elf.get_symbol("il2cpp_gc_disable").unwrap();
     let il2cpp_gc_disable: extern "C" fn() = unsafe { std::mem::transmute(il2cpp_gc_disable) };

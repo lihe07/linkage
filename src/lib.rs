@@ -1,4 +1,5 @@
 mod hooks;
+mod patches;
 mod relocs;
 
 use log::*;
@@ -106,98 +107,6 @@ impl ElfFile {
         }
 
         Err(anyhow::anyhow!("Symbol not found: {}", name))
-    }
-
-    fn relocate(&self) -> anyhow::Result<()> {
-        // First, RELA
-        for rela in self.object.dynrelas.iter() {
-            match rela.r_type {
-                goblin::elf::reloc::R_AARCH64_RELATIVE => {
-                    let addr = self.base + rela.r_offset as u64;
-
-                    let addend = rela.r_addend.unwrap() as u64;
-                    let value = self.base + addend;
-                    unsafe {
-                        // debug!(
-                        //     "Relocating RELA at {:x} ({:x} + {:x}) to {:x} ({:x} + {:x})",
-                        //     addr, self.base, rela.r_offset, value, self.base, addend
-                        // );
-                        let ptr = addr as *mut u64;
-                        *ptr = value;
-                    }
-                }
-                goblin::elf::reloc::R_AARCH64_GLOB_DAT => {
-                    let addr = self.base + rela.r_offset as u64;
-                    let symbol = &self.object.dynsyms.get(rela.r_sym as usize).unwrap();
-                    let name = &self.object.dynstrtab[symbol.st_name as usize];
-
-                    if let Ok(symbol) = self.find_symbol(name) {
-                        let value = symbol;
-                        debug!(
-                            "Relocating GLOB_DAT at {:x} ({}) to {:x} ({})",
-                            addr, name, value, name
-                        );
-                        let ptr = addr as *mut u64;
-                        unsafe {
-                            *ptr = value;
-                        }
-                    } else {
-                        debug!("Symbol not found: {}", name);
-                    }
-                }
-                goblin::elf::reloc::R_AARCH64_ABS64 => {
-                    let addr = self.base + rela.r_offset as u64;
-                    let symbol = &self.object.dynsyms.get(rela.r_sym as usize).unwrap();
-                    let name = &self.object.dynstrtab[symbol.st_name as usize];
-                    if let Ok(symbol) = self.find_symbol(name) {
-                        let value = symbol;
-                        debug!(
-                            "Relocating ABS64 at {:x} ({:x} + {:x}) to {:x} ({})",
-                            addr, self.base, rela.r_offset, value, name
-                        );
-                        let ptr = addr as *mut u64;
-                        unsafe {
-                            *ptr = value;
-                        }
-                    } else {
-                        debug!("Symbol not found: {}", name);
-                    }
-                }
-                _ => {
-                    debug!("Unknown relocation type: {}", rela.r_type);
-                }
-            }
-        }
-
-        // Then JMPREL
-        for rel in self.object.pltrelocs.iter() {
-            match rel.r_type {
-                goblin::elf::reloc::R_AARCH64_JUMP_SLOT => {
-                    let addr = self.base + rel.r_offset as u64;
-                    let symbol = &self.object.dynsyms.get(rel.r_sym as usize).unwrap();
-                    let name = &self.object.dynstrtab[symbol.st_name as usize];
-
-                    if let Ok(symbol) = self.find_symbol(name) {
-                        let value = symbol;
-                        debug!(
-                            "Relocating JMP_SLOT at {:x} ({:x} + {:x}) to {:x} ({})",
-                            addr, self.base, rel.r_offset, value, name
-                        );
-                        let ptr = addr as *mut u64;
-                        unsafe {
-                            *ptr = value;
-                        }
-                    } else {
-                        debug!("Symbol not found: {}", name);
-                    }
-                }
-                _ => {
-                    debug!("Unknown relocation type: {}", rel.r_type);
-                }
-            }
-        }
-
-        Ok(())
     }
 
     fn relocate_custom(&self) -> anyhow::Result<()> {
@@ -324,6 +233,12 @@ impl ElfFile {
 
         set_vma_name(bss_map, 0x288000, ".bss");
 
+        // Zero BSS
+        let bss_ptr = bss_map as *mut u8;
+        for i in 0..0x288000 {
+            *bss_ptr.offset(i as isize) = 0;
+        }
+
         // Close fd
         libc::close(fd);
 
@@ -347,8 +262,9 @@ impl ElfFile {
         relocs::process_rel_ro(base as *mut u8);
         relocs::process_data(base as *mut u8);
 
-        // self.relocate()?;
         self.relocate_custom()?;
+
+        patches::apply_patches(self.base);
 
         debug!("My pid: {}", std::process::id());
 
@@ -436,7 +352,17 @@ const MAGIC: u32 = 0x114514;
 static mut IL2CPP: Option<ElfFile> = None;
 
 #[no_mangle]
-pub unsafe extern "C" fn myopen(filename: *const u8, flags: i32) -> *mut libc::c_void {
+pub extern "C" fn my_log_callback(message: *const libc::c_char) {
+    let message = unsafe { std::ffi::CStr::from_ptr(message) };
+    info!("il2cpp: {}", message.to_str().unwrap());
+}
+
+/// # Safety
+#[no_mangle]
+pub unsafe extern "C" fn myopen(
+    filename_ptr: *const libc::c_char,
+    flags: i32,
+) -> *mut libc::c_void {
     // First try init android logging
     android_logger::init_once(
         android_logger::Config::default()
@@ -444,7 +370,7 @@ pub unsafe extern "C" fn myopen(filename: *const u8, flags: i32) -> *mut libc::c
             .with_max_level(log::LevelFilter::Trace),
     );
 
-    let filename = unsafe { std::ffi::CStr::from_ptr(filename) };
+    let filename = std::ffi::CStr::from_ptr(filename_ptr);
     let filename = filename.to_str().unwrap();
     info!("Hook: dlopen({})", filename);
 
@@ -452,7 +378,7 @@ pub unsafe extern "C" fn myopen(filename: *const u8, flags: i32) -> *mut libc::c
     if filename.ends_with("libil2cpp.so") {
         info!("Found libil2cpp.so, using our loader");
 
-        if let Some(elf) = IL2CPP.as_ref() {
+        if IL2CPP.is_some() {
             info!("Already loaded libil2cpp.so");
             return MAGIC as *mut libc::c_void;
         }
@@ -466,13 +392,21 @@ pub unsafe extern "C" fn myopen(filename: *const u8, flags: i32) -> *mut libc::c
 
         info!("Loaded libil2cpp.so");
 
+        // Perform some extra moves
+        let il2cpp_register_log_callback = elf.get_symbol("il2cpp_register_log_callback").unwrap();
+
+        let il2cpp_register_log_callback: extern "C" fn(
+            extern "C" fn(*const std::os::raw::c_char),
+        ) = std::mem::transmute(il2cpp_register_log_callback);
+        il2cpp_register_log_callback(my_log_callback);
+
         IL2CPP = Some(elf);
 
         // Allocate a handle in heap
 
         MAGIC as *mut libc::c_void
     } else {
-        libc::dlopen(filename.as_ptr(), flags)
+        libc::dlopen(filename_ptr, flags)
     }
 }
 
@@ -489,13 +423,33 @@ pub unsafe extern "C" fn myclose(handle: *mut libc::c_void) -> libc::c_int {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn mysym(handle: *mut libc::c_void, symbol: *const u8) -> *mut libc::c_void {
-    let symbol = unsafe { std::ffi::CStr::from_ptr(symbol) };
+unsafe extern "C" fn my_il2cpp_gc_enable() {
+    info!("Hook: il2cpp_gc_enable");
+}
+
+#[no_mangle]
+unsafe extern "C" fn my_il2cpp_gc_disable() {
+    info!("Hook: il2cpp_gc_disable");
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mysym(
+    handle: *mut libc::c_void,
+    symbol_ptr: *const libc::c_char,
+) -> *mut libc::c_void {
+    let symbol = unsafe { std::ffi::CStr::from_ptr(symbol_ptr) };
     let symbol = symbol.to_str().unwrap();
     info!("My dlsym: {:?}", symbol);
 
     if handle == MAGIC as *mut libc::c_void {
         info!("My dlsym: using our handle");
+
+        if symbol == "il2cpp_gc_enable" {
+            return my_il2cpp_gc_enable as *mut libc::c_void;
+        }
+        if symbol == "il2cpp_gc_disable" {
+            return my_il2cpp_gc_disable as *mut libc::c_void;
+        }
 
         let elf = IL2CPP.as_ref().unwrap();
 
@@ -507,5 +461,5 @@ pub unsafe extern "C" fn mysym(handle: *mut libc::c_void, symbol: *const u8) -> 
         return std::ptr::null_mut();
     }
 
-    libc::dlsym(handle, symbol.as_ptr())
+    libc::dlsym(handle, symbol_ptr)
 }

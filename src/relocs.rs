@@ -111,8 +111,6 @@ pub fn process_data(base: *mut u8) {
         i += 1;
     }
 
-    //
-
     // For each addr in RELATIVE_RELS, compute relative addr
     for line in RELATIVE_RELS.lines() {
         // Parse hex offset
@@ -521,12 +519,10 @@ pub fn get_custom_relocs() -> Vec<MyReloc> {
         JMP_SLOT!(0x2f639a0, "pthread_mutexattr_destroy"),
         JMP_SLOT!(0x2f639a8, "closedir"),
 
-
         // Floating
         JMP_SLOT!(0x2f64068, "malloc"),
         JMP_SLOT!(0x2f64078, "free"),
         JMP_SLOT!(0x2f64088, "calloc"),
         JMP_SLOT!(0x2f64090, "realloc"),
-        // JMP_SLOT!(0x2f640b8, "unity_log_print")
     ]
 }

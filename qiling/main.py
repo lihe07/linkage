@@ -151,19 +151,138 @@ def hook_il2cpp_init(ql: Qiling, *args) -> None:
 
 q.hook_address(hook_il2cpp_init, 0x6C5F34B4)
 
-
-def hook_gc_init(ql: Qiling, *args) -> None:
-    print("GC init called")
-    # ql.verbose = QL_VERBOSE.DEBUG
+call_stack = []
 
 
-def hook_after_gc_init(ql: Qiling, *args) -> None:
-    print("After GC init called")
+def print_call_stack():
+    for addr in call_stack:
+        if addr > BASE:
+            print(f"libil2cpp + {hex(addr - BASE)}", end=" -> ")
+        else:
+            region = None
+            region_start = None
+            for start, end, _, _, name in q.mem.get_mapinfo():
+                if start <= addr < end:
+                    region = name
+                    region_start = start
+                    break
+
+            if region is not None:
+                print(f"{region} + {hex(addr - region_start)}", end=" -> ")
+            else:
+                print(f"{hex(addr)}", end=" -> ")
+    print()
 
 
-q.hook_address(hook_gc_init, BASE + 0x00AC30A0)
+def rec_func_calls(ql: Qiling, address: int, size: int, md) -> None:
+    buf = ql.mem.read(address, size)
 
-q.hook_address(hook_after_gc_init, BASE + 0x00AC3104)
+    for insn in md.disasm(buf, address):
+        if "bl" in insn.mnemonic:
+            addr = int(insn.op_str.strip("#").strip("0x"), 16)
+
+            if "blr" in insn.mnemonic:
+                addr = ql.arch.regs.__getattr__(insn.op_str)
+
+            call_stack.append(addr)
+        if "ret" in insn.mnemonic:
+            call_stack.pop()
+
+
+def start_trace_stack(ql: Qiling) -> None:
+    print("Starting stack trace")
+    ql.hook_code(rec_func_calls, user_data=q.arch.disassembler)
+
+
+def hook_object_new(ql: Qiling, *args) -> None:
+    clazz = ql.arch.regs.x0
+
+    ptr_to_class_name = ql.mem.read_ptr(clazz + 16, 8)
+
+    class_name = ql.mem.string(ptr_to_class_name)
+
+    print(f"Object::New({class_name})")
+
+    unwind_stack(ql)
+    ql.stop()
+
+
+def unwind_stack(ql: Qiling) -> None:
+    fp = ql.arch.regs.x29
+    link = ql.arch.regs.arch_pc
+
+    links = []
+
+    links.append(link)
+
+    while True:
+        # Trace back one frame
+        # Last fp and link is stored at the current fp
+        link = ql.mem.read_ptr(fp + 8, 8)
+        fp = ql.mem.read_ptr(fp, 8)
+
+        links.append(link)
+
+        if fp == 0:
+            break
+
+    # reverse the list
+    links = links[::-1]
+
+    for link in links:
+        if link > BASE:
+            print(f"libil2cpp + {hex(link - BASE)}", end=" -> ")
+        else:
+            region = None
+            region_start = None
+            for start, end, _, _, name in q.mem.get_mapinfo():
+                if start <= link < end:
+                    region = name
+                    region_start = start
+                    break
+            if region is not None:
+                print(f"{region} + {hex(link - region_start)}", end=" -> ")
+            else:
+                print(f"{hex(link)}", end=" -> ")
+
+    print()
+
+
+q.hook_address(hook_object_new, BASE + 0xABB9EC)
+
+
+q.hook_address(lambda _: print("Before Runtime::ClassInit"), BASE + 0xABBAA4)
+q.hook_address(lambda _: print("Object New Ret"), BASE + 0xABBAB4)
+
+
+def hook_runtime_invoke(ql: Qiling, *args) -> None:
+    print("Before Runtime::Invoke")
+    method = ql.arch.regs.x0
+    ptr_to_method_name = ql.mem.read_ptr(method + 16, 8)
+    method_name = ql.mem.string(ptr_to_method_name)
+
+    method_addr = ql.mem.read_ptr(method, 8)
+    invoker_addr = ql.mem.read_ptr(method + 8, 8)
+
+    print(
+        f"Runtime::Invoke({method_name}, Invoker {hex(invoker_addr - BASE)}, Method {hex(method_addr - BASE)})"
+    )
+
+    # start_trace_stack(ql)
+
+
+q.hook_address(hook_runtime_invoke, BASE + 0xA8FA24)
+q.hook_address(lambda _: print("After Runtime::Invoke"), BASE + 0xA8FA9C)
+
+# 72c6b4db9c
+
+
+def hook_gc_malloc(ql: Qiling, *args) -> None:
+    size = ql.arch.regs.x0
+    print(f"GC::Malloc({size})")
+
+
+q.hook_address(hook_gc_malloc, BASE + 0xAD84D0)
 
 
 def hook_getenv(ql: Qiling, *args) -> None:

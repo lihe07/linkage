@@ -7,6 +7,7 @@ linkage:
 	cp ./target/aarch64-linux-android/debug/liblinkage.so .
 
 qiling: linkage
+	cp ~/Documents/krf/target/lib/arm64-v8a/libil2cpp.so ./qiling/arm64_android6.0/libil2cpp.so
 	cd ./qiling && python ./main.py
 
 apk: linkage
